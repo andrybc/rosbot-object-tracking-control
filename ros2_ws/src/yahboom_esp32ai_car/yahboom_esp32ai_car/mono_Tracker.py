@@ -4,7 +4,7 @@ import getpass
 import threading
 from yahboom_esp32ai_car.astra_common import *
 from sensor_msgs.msg import CompressedImage,Image
-from std_msgs.msg import Int32, Bool,UInt16
+from std_msgs.msg import Int32, Bool, UInt16, Float32
 import rclpy
 from rclpy.node import Node
 from cv_bridge import CvBridge
@@ -18,6 +18,14 @@ class mono_Tracker(Node):
         super().__init__(name)
         self.pub_Servo1 = self.create_publisher(Int32,"servo_s1" , 10)
         self.pub_Servo2 = self.create_publisher(Int32,"servo_s2" , 10) 
+
+        # New tracker output topics 
+        self.pub_found   = self.create_publisher(Bool,    "/tracker/target_found", 10)
+        self.pub_target_x = self.create_publisher(Float32, "/tracker/target_x", 10)
+        self.pub_target_y = self.create_publisher(Float32, "/tracker/target_y", 10)
+        self.pub_err_x   = self.create_publisher(Float32, "/tracker/error_x", 10)
+        self.pub_err_y   = self.create_publisher(Float32, "/tracker/error_y", 10)
+
         self.declare_param()
         self.target_servox = 0
         self.target_servoy = 10
@@ -175,13 +183,26 @@ class mono_Tracker(Node):
             self.target_servoy = 40
         elif self.target_servoy <= -90:
             self.target_servoy = -90
-        print("servo1",self.target_servox)
-        servo1_angle = Int32()
-        servo1_angle.data = int(self.target_servox)
-        servo2_angle = Int32()
-        servo2_angle.data = int(self.target_servoy)
-        self.pub_Servo1.publish(servo1_angle)
-        self.pub_Servo2.publish(servo2_angle)
+        #
+        self.pub_found.publish(Bool(data=True))
+
+        self.pub_target_x.publish(Float32(data=float(point_x)))
+        self.pub_target_y.publish(Float32(data=float(point_y)))
+
+        err_x = float(point_x - 320.0)
+        err_y = float(point_y - 240.0)
+        self.pub_err_x.publish(Float32(data=err_x))
+        self.pub_err_y.publish(Float32(data=err_y))
+
+
+        # disabling direct servo control
+        # print("servo1",self.target_servox)
+        # servo1_angle = Int32()
+        # servo1_angle.data = int(self.target_servox)
+        # servo2_angle = Int32()
+        # servo2_angle.data = int(self.target_servoy)
+        # self.pub_Servo1.publish(servo1_angle)
+        # self.pub_Servo2.publish(servo2_angle)
 
     def dynamic_reconfigure_callback(self, config, level):
         self.scale = config['scale']
@@ -253,8 +274,13 @@ class mono_Tracker(Node):
                 high = targEnd_y - targBegin_y
                 self.point_pose = (center_x, center_y, min(width, high))
         if self.Track_state == 'tracking':
-            if self.circle[2] != 0: threading.Thread(target=self.execute, args=(self.circle[0], self.circle[1])).start()
-            if self.point_pose[0] != 0 and self.point_pose[1] != 0: threading.Thread(target=self.execute, args=(self.point_pose[0], self.point_pose[1])).start()
+            if self.circle[2] != 0:
+                threading.Thread(target=self.execute, args=(self.circle[0], self.circle[1])).start()
+            elif self.point_pose[0] != 0 and self.point_pose[1] != 0:
+                threading.Thread(target=self.execute, args=(self.point_pose[0], self.point_pose[1])).start()
+            else:
+                # tracking active but no valid target this frame
+                self.pub_found.publish(Bool(data=False))
         if self.tracker_type != "color": cv.putText(rgb_img, " Tracker", (260, 20), cv.FONT_HERSHEY_SIMPLEX, 0.75, (50, 170, 50), 2)
         return rgb_img, binary
 
