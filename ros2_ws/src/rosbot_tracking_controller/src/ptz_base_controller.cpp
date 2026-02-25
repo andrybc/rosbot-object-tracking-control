@@ -32,8 +32,8 @@ public:
     this->declare_parameter<double>("outer_zone", 0.60);  // 60% of half-width
 
     // Servo behavior
-    this->declare_parameter<double>("servo_kp", 0.005);     // deg per pixel (scaled)
-    this->declare_parameter<double>("servo_max_step_deg", 0.47); // max change per control tick
+    this->declare_parameter<double>("servo_kp", 0.01);     // deg per pixel (scaled)
+    this->declare_parameter<double>("servo_max_step_deg", 0.4); // max change per control tick
     this->declare_parameter<int>("servo1_min", -90);
     this->declare_parameter<int>("servo1_max", 90);
     this->declare_parameter<int>("servo2_min", -90);
@@ -102,16 +102,15 @@ public:
   }
 
 private:
-  void publish_servos(int s1, int s2)
-  {
+    void publish_servos(double s1, double s2)
+    {
     std_msgs::msg::Int32 m1;
     std_msgs::msg::Int32 m2;
-    m1.data = s1;
-    m2.data = s2;
+    m1.data = static_cast<int>(std::lround(s1));
+    m2.data = static_cast<int>(std::lround(s2));
     pub_servo1_->publish(m1);
-   // pub_servo2_->publish(m2);
-  }
-
+    pub_servo2_->publish(m2);
+    }
   void publish_stop()
   {
     geometry_msgs::msg::Twist t;
@@ -186,7 +185,7 @@ private:
       }
       RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 500,
-        "BASE MODE: ex_norm=%.2f wz=%.3f servo1=%d",
+        "BASE MODE: ex_norm=%.2f wz=%.3f servo1=%.3f",
         ex_norm_, wz, servo1_);
       publish_turn(wz);
 
@@ -219,28 +218,28 @@ private:
     // Clamp step size for smoothness
     const double max_step = this->get_parameter("servo_max_step_deg").as_double();
     const double ax_norm = std::abs(ex_norm_); // 0..1
-const double gain = clamp_double(ax_norm, 0.1, 1.0); // never zero, but smaller near center
-s1_step = clamp_double(s1_step * gain, -max_step, max_step);
-    s1_step = clamp_double(s1_step, -max_step, max_step);
+    const double gain = clamp_double(ax_norm, 0.1, 1.0); // never zero, but smaller near center
+    s1_step = clamp_double(s1_step * gain, -max_step, max_step);
+    
 
     // Tilt direction is usually inverted relative to image y (down is positive).
     // If your tilt moves wrong way, flip sign.
     s2_step = clamp_double(-s2_step, -max_step, max_step);
     RCLCPP_INFO_THROTTLE(
     this->get_logger(), *this->get_clock(), 500,
-    "SERVO MODE: raw_ex=%.1f s1_step=%.2f servo1(before)=%d",
+    "SERVO MODE: raw_ex=%.1f s1_step=%.2f servo1(before)=%.3f",
     raw_ex_, s1_step, servo1_);
 
-    servo1_ += static_cast<int>(std::round(s1_step));
-    servo2_ += static_cast<int>(std::round(s2_step));
+    servo1_ += s1_step;
+    servo2_ += s2_step;
 
     const int s1_min = this->get_parameter("servo1_min").as_int();
     const int s1_max = this->get_parameter("servo1_max").as_int();
     const int s2_min = this->get_parameter("servo2_min").as_int();
     const int s2_max = this->get_parameter("servo2_max").as_int();
 
-    servo1_ = static_cast<int>(clamp_double(servo1_, s1_min, s1_max));
-    servo2_ = static_cast<int>(clamp_double(servo2_, s2_min, s2_max));
+    servo1_ = clamp_double(servo1_, s1_min, s1_max);
+    servo2_ = clamp_double(servo2_, s2_min, s2_max);
 
     publish_servos(servo1_, servo2_);
   }
@@ -269,8 +268,8 @@ private:
   double ey_norm_{0.0};
 
   // Servo state
-  int servo1_{0};
-  int servo2_{10};
+  double servo1_{0.0};
+  double servo2_{10.0};
 };
 
 int main(int argc, char ** argv)
