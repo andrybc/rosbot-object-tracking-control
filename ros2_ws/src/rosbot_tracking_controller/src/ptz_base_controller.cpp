@@ -1,25 +1,22 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <algorithm>
 
+#include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
-#include "geometry_msgs/msg/twist.hpp"
+#include "std_msgs/msg/int32.hpp"
 
 using namespace std::chrono_literals;
 
-static double clamp_double(double v, double lo, double hi)
-{
+static double clamp_double(double v, double lo, double hi) {
   return std::max(lo, std::min(hi, v));
 }
 
-class PtzBaseController : public rclcpp::Node
-{
+class PtzBaseController : public rclcpp::Node {
 public:
-  PtzBaseController() : Node("ptz_base_controller")
-  {
+  PtzBaseController() : Node("ptz_base_controller") {
     // --- Parameters (tuning knobs)
     // Tracker errors are in PIXELS from center. Your mono_Tracker uses 640x480.
     this->declare_parameter<int>("img_width", 640);
@@ -28,12 +25,13 @@ public:
     // Zones (as fraction of half-width/half-height)
     // inner: deadzone where we do nothing (prevents jitter)
     // outer: near-edge zone where we turn the base
-    this->declare_parameter<double>("inner_zone", 0.15);  // 15% of half-width
-    this->declare_parameter<double>("outer_zone", 0.60);  // 60% of half-width
+    this->declare_parameter<double>("inner_zone", 0.15); // 15% of half-width
+    this->declare_parameter<double>("outer_zone", 0.60); // 60% of half-width
 
     // Servo behavior
-    this->declare_parameter<double>("servo_kp", 0.01);     // deg per pixel (scaled)
-    this->declare_parameter<double>("servo_max_step_deg", 0.4); // max change per control tick
+    this->declare_parameter<double>("servo_kp", 0.01); // deg per pixel (scaled)
+    this->declare_parameter<double>("servo_max_step_deg",
+                                    0.4); // max change per control tick
     this->declare_parameter<int>("servo1_min", -90);
     this->declare_parameter<int>("servo1_max", 90);
     this->declare_parameter<int>("servo2_min", -90);
@@ -42,10 +40,13 @@ public:
     this->declare_parameter<int>("servo2_center", 10);
 
     // Base turn behavior
-    this->declare_parameter<double>("base_turn_kp", 0.8);    // rad/s per normalized error
-    this->declare_parameter<double>("base_turn_max", 0.25);  // clamp
-    this->declare_parameter<double>("base_turn_min", 0.06);  // minimum when turning
-    this->declare_parameter<double>("lost_timeout_sec", 0.35); // stop if no target recently
+    this->declare_parameter<double>("base_turn_kp",
+                                    0.8); // rad/s per normalized error
+    this->declare_parameter<double>("base_turn_max", 0.25); // clamp
+    this->declare_parameter<double>("base_turn_min",
+                                    0.06); // minimum when turning
+    this->declare_parameter<double>("lost_timeout_sec",
+                                    0.35); // stop if no target recently
 
     // Smoothing (EMA). Higher = smoother but laggier.
     this->declare_parameter<double>("ema_alpha", 0.35);
@@ -56,34 +57,32 @@ public:
     // --- Publishers
     pub_servo1_ = this->create_publisher<std_msgs::msg::Int32>("/servo_s1", 10);
     pub_servo2_ = this->create_publisher<std_msgs::msg::Int32>("/servo_s2", 10);
-    pub_cmd_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    pub_cmd_ =
+        this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
     // --- Subscribers (tracker outputs)
     sub_found_ = this->create_subscription<std_msgs::msg::Bool>(
-      "/tracker/target_found", 10,
-      [this](const std_msgs::msg::Bool::SharedPtr msg)
-      {
-        target_found_ = msg->data;
-        if (target_found_) {
-          last_seen_time_ = this->now();
-        }
-      });
+        "/tracker/target_found", 10,
+        [this](const std_msgs::msg::Bool::SharedPtr msg) {
+          target_found_ = msg->data;
+          if (target_found_) {
+            last_seen_time_ = this->now();
+          }
+        });
 
     sub_ex_ = this->create_subscription<std_msgs::msg::Float32>(
-      "/tracker/error_x", 10,
-      [this](const std_msgs::msg::Float32::SharedPtr msg)
-      {
-        raw_ex_ = msg->data;
-        have_ex_ = true;
-      });
+        "/tracker/error_x", 10,
+        [this](const std_msgs::msg::Float32::SharedPtr msg) {
+          raw_ex_ = msg->data;
+          have_ex_ = true;
+        });
 
     sub_ey_ = this->create_subscription<std_msgs::msg::Float32>(
-      "/tracker/error_y", 10,
-      [this](const std_msgs::msg::Float32::SharedPtr msg)
-      {
-        raw_ey_ = msg->data;
-        have_ey_ = true;
-      });
+        "/tracker/error_y", 10,
+        [this](const std_msgs::msg::Float32::SharedPtr msg) {
+          raw_ey_ = msg->data;
+          have_ey_ = true;
+        });
 
     // Initial servo positions
     servo1_ = this->get_parameter("servo1_center").as_int();
@@ -95,40 +94,38 @@ public:
     // Timer loop
     const double hz = this->get_parameter("control_hz").as_double();
     timer_ = this->create_wall_timer(
-      std::chrono::duration<double>(1.0 / hz),
-      std::bind(&PtzBaseController::control_step, this));
+        std::chrono::duration<double>(1.0 / hz),
+        std::bind(&PtzBaseController::control_step, this));
 
-    RCLCPP_INFO(this->get_logger(), "ptz_base_controller started. Waiting for /tracker/* topics...");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "ptz_base_controller started. Waiting for /tracker/* topics...");
   }
 
 private:
-    void publish_servos(double s1, double s2)
-    {
+  void publish_servos(double s1, double s2) {
     std_msgs::msg::Int32 m1;
     std_msgs::msg::Int32 m2;
     m1.data = static_cast<int>(std::lround(s1));
     m2.data = static_cast<int>(std::lround(s2));
     pub_servo1_->publish(m1);
     pub_servo2_->publish(m2);
-    }
-  void publish_stop()
-  {
+  }
+  void publish_stop() {
     geometry_msgs::msg::Twist t;
     t.linear.x = 0.0;
     t.angular.z = 0.0;
-    //pub_cmd_->publish(t);
+    pub_cmd_->publish(t);
   }
 
-  void publish_turn(double wz)
-  {
+  void publish_turn(double wz) {
     geometry_msgs::msg::Twist t;
     t.linear.x = 0.0;
     t.angular.z = wz;
-    //pub_cmd_->publish(t);
+    pub_cmd_->publish(t);
   }
 
-  void control_step()
-  {
+  void control_step() {
     // If we don't even have error values yet, do nothing
     if (!have_ex_ || !have_ey_) {
       return;
@@ -150,9 +147,12 @@ private:
     ex_norm_ = alpha * ex_norm_raw + (1.0 - alpha) * ex_norm_;
     ey_norm_ = alpha * ey_norm_raw + (1.0 - alpha) * ey_norm_;
 
-    // If target isn't currently found OR it hasn't been seen recently, stop base
-    const double lost_timeout = this->get_parameter("lost_timeout_sec").as_double();
-    const bool recently_seen = (this->now() - last_seen_time_).seconds() <= lost_timeout;
+    // If target isn't currently found OR it hasn't been seen recently, stop
+    // base
+    const double lost_timeout =
+        this->get_parameter("lost_timeout_sec").as_double();
+    const bool recently_seen =
+        (this->now() - last_seen_time_).seconds() <= lost_timeout;
 
     if (!target_found_ || !recently_seen) {
       // No target: stop base motion. Keep servos where they are (stable).
@@ -183,17 +183,19 @@ private:
       if (std::abs(wz) < wz_min) {
         wz = (wz >= 0.0) ? wz_min : -wz_min;
       }
-      RCLCPP_INFO_THROTTLE(
-        this->get_logger(), *this->get_clock(), 500,
-        "BASE MODE: ex_norm=%.2f wz=%.3f servo1=%.3f",
-        ex_norm_, wz, servo1_);
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                           "BASE MODE: ex_norm=%.2f wz=%.3f servo1=%.3f",
+                           ex_norm_, wz, servo1_);
       publish_turn(wz);
 
-      // While base turns, gently pull servo1 back toward center (prevents hitting servo limits)
+      // While base turns, gently pull servo1 back toward center (prevents
+      // hitting servo limits)
       const int s1_center = this->get_parameter("servo1_center").as_int();
-      const double pull = 1.0;  // 1 degree per tick toward center
-      if (servo1_ > s1_center) servo1_ -= static_cast<int>(pull);
-      if (servo1_ < s1_center) servo1_ += static_cast<int>(pull);
+      const double pull = 1.0; // 1 degree per tick toward center
+      if (servo1_ > s1_center)
+        servo1_ -= static_cast<int>(pull);
+      if (servo1_ < s1_center)
+        servo1_ += static_cast<int>(pull);
 
       // (Optional) you can also keep tilt stable here
       publish_servos(servo1_, servo2_);
@@ -209,26 +211,29 @@ private:
     }
 
     // Convert normalized error into servo updates
-    // If target is to the right (ex_norm > 0), pan right (servo1 increases or decreases?)
-    // Your system: servo1 pans left/right. If it moves the wrong way, flip the sign here.
+    // If target is to the right (ex_norm > 0), pan right (servo1 increases or
+    // decreases?) Your system: servo1 pans left/right. If it moves the wrong
+    // way, flip the sign here.
     const double servo_kp = this->get_parameter("servo_kp").as_double();
-    double s1_step = servo_kp * (raw_ex_);  // proportional to pixel error
-    double s2_step = servo_kp * (raw_ey_);  // proportional to pixel error (we'll flip below)
+    double s1_step = servo_kp * (raw_ex_); // proportional to pixel error
+    double s2_step =
+        servo_kp * (raw_ey_); // proportional to pixel error (we'll flip below)
 
     // Clamp step size for smoothness
-    const double max_step = this->get_parameter("servo_max_step_deg").as_double();
+    const double max_step =
+        this->get_parameter("servo_max_step_deg").as_double();
     const double ax_norm = std::abs(ex_norm_); // 0..1
-    const double gain = clamp_double(ax_norm, 0.1, 1.0); // never zero, but smaller near center
+    const double gain =
+        clamp_double(ax_norm, 0.1, 1.0); // never zero, but smaller near center
     s1_step = clamp_double(s1_step * gain, -max_step, max_step);
-    
 
-    // Tilt direction is usually inverted relative to image y (down is positive).
-    // If your tilt moves wrong way, flip sign.
+    // Tilt direction is usually inverted relative to image y (down is
+    // positive). If your tilt moves wrong way, flip sign.
     s2_step = clamp_double(-s2_step, -max_step, max_step);
     RCLCPP_INFO_THROTTLE(
-    this->get_logger(), *this->get_clock(), 500,
-    "SERVO MODE: raw_ex=%.1f s1_step=%.2f servo1(before)=%.3f",
-    raw_ex_, s1_step, servo1_);
+        this->get_logger(), *this->get_clock(), 500,
+        "SERVO MODE: raw_ex=%.1f s1_step=%.2f servo1(before)=%.3f", raw_ex_,
+        s1_step, servo1_);
 
     servo1_ += s1_step;
     servo2_ += s2_step;
@@ -272,8 +277,7 @@ private:
   double servo2_{10.0};
 };
 
-int main(int argc, char ** argv)
-{
+int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   rclcpp::spin(std::make_shared<PtzBaseController>());
   rclcpp::shutdown();
