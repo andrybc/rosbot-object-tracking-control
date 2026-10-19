@@ -10,3 +10,6 @@ __pycache__/
 
 # OS
 .DS_Store
+.vscode/browse.vc.db*
+__pycache__/
+*.pyc
